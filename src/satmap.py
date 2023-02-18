@@ -33,17 +33,6 @@ def extractCNOTs(fname):
                 cnots.append((int(match.group(1)), int(match.group(2))))
     return cnots
 
-def extract2qubit(fname):
-    gates = []
-    circ = qiskit.QuantumCircuit.from_qasm_file(fname)
-    for j in range(len(circ)):
-        qubits = circ[j][1]
-        
-        if len(qubits) == 2:
-            gates.append([q.index for q in qubits])
-        elif len(qubits) > 2:
-            print('Warning: ignoring gate with more than 2 qubits')
-    return gates
 
 def extractQbits(fname):
     # Returns highest-value register used
@@ -442,7 +431,7 @@ def solve_bounded_above(progName, cm, swapNum, chunks, pname="test", sname="out"
     (head, tail) = os.path.split(progName)
     with open(os.path.join(head, "qiskit-" + tail), "w") as f:
         f.write(hack.qasm())
-    cnots = extract2qubit(os.path.join(head, "qiskit-" + tail))
+    cnots = extractCNOTs(os.path.join(head, "qiskit-" + tail))
     numCnots = len(cnots)
 
     layers= range(len(cnots))
@@ -537,7 +526,7 @@ def solve(progName, cm, swapNum, chunks, iterations=100, time_wbo_max = 600, qao
     (head, tail) = os.path.split(progName)
     with open(os.path.join(head, "qiskit-" + tail), "w") as f:
         f.write(hack.qasm())
-    cnots = extract2qubit(os.path.join(head, "qiskit-" + tail))
+    cnots = extractCNOTs(os.path.join(head, "qiskit-" + tail))
     sorted_cnots = sortCnots(logNum, cnots)
     numCnots = len(cnots)
 
@@ -574,7 +563,10 @@ def solve(progName, cm, swapNum, chunks, iterations=100, time_wbo_max = 600, qao
             if time_wbo_max:
                 solve_time_rem = time_wbo_max-time_elapsed_wbo 
             try:
-               p = subprocess.Popen(["lib/Open-WBO-Inc/open-wbo-inc_release",   "-iterations="+str(iterations), pname+"-chnk"+str(currentChunk)+".cnf"],  stdout=open( sname + "-chnk0" + ".txt", "w"))
+               wbo_path = os.path.abspath(os.path.join('satmap/lib/Open-WBO-Inc/open-wbo-inc_release'))
+               p = subprocess.Popen([wbo_path,   "-iterations="+str(iterations), pname+"-chnk"+str(currentChunk)+".cnf"],  stdout=open( sname + "-chnk0" + ".txt", "w"))
+
+               #p = subprocess.Popen(["lib/Open-WBO-Inc/open-wbo-inc_release",   "-iterations="+str(iterations), pname+"-chnk"+str(currentChunk)+".cnf"],  stdout=open( sname + "-chnk0" + ".txt", "w"))
                p.wait(timeout=solve_time_rem/(chunks-currentChunk))
             except subprocess.TimeoutExpired:
                 print("exiting open-wbo because of solve time alloted...")
@@ -601,7 +593,12 @@ def solve(progName, cm, swapNum, chunks, iterations=100, time_wbo_max = 600, qao
             if time_wbo_max:
                 solve_time_rem = time_wbo_max- time_elapsed_wbo 
             try:
-                p = subprocess.Popen(["lib/Open-WBO-Inc/open-wbo-inc_release", "-iterations="+str(iterations), pname+"-chnk"+str(currentChunk)+".cnf"], stdout=open(sname + "-chnk" + str(currentChunk) + ".txt", "w"))
+                wbo_path = os.path.abspath(os.path.join('satmap/lib/Open-WBO-Inc/open-wbo-inc_release'))
+                p = subprocess.Popen([wbo_path, "-iterations=" + str(iterations),
+                                      pname + "-chnk" + str(currentChunk) + ".cnf"],
+                                     stdout=open(sname + "-chnk" + str(currentChunk) + ".txt", "w"))
+
+                #p = subprocess.Popen(["lib/Open-WBO-Inc/open-wbo-inc_release", "-iterations="+str(iterations), pname+"-chnk"+str(currentChunk)+".cnf"], stdout=open(sname + "-chnk" + str(currentChunk) + ".txt", "w"))
                 p.wait(timeout=solve_time_rem/(chunks-currentChunk))
             except subprocess.TimeoutExpired:
                 print("exiting open-wbo because of solve time alloted...")
@@ -714,7 +711,7 @@ def toQasm(physNum, logNum, numCnots, swapNum, solSource, progPath, cm, prevMap,
     cnotCount = 0 
     for j in range(len(circ)):
         qubits = list(map(lambda q : qiskit.circuit.Qubit(q.register, logToPhys[(q.index,min(cnotCount, numCnots-1))]), circ[j][1]))
-        if len(circ[j][1]) == 2:
+        if circ[j][0].name == 'cx':
             if cnotCount in swapIndices:
                 swapsK = filter(lambda s: s[3] == cnotCount, swaps)
                 for s in swapsK:
@@ -732,7 +729,7 @@ def toQasm(physNum, logNum, numCnots, swapNum, solSource, progPath, cm, prevMap,
 def toQasmFF(progName, cm, swapNum, chunks, solSource,  swaps=None):
     pointer = 0
     physNum = len(cm)
-    cnots = extract2qubit(progName)
+    cnots = extractCNOTs(progName)
     logNum = extractQbits(progName)
     numCnots = len(cnots)
     # layers = getLayers(cnots)
@@ -770,12 +767,8 @@ def computeFidelity(circ, calibrationData):
 
 
 def transpile(progname, cm, swapNum=1, cnfname='test', sname='out', slice_size=25, max_sat_time=600, routing=True, weighted=False, calibrationData = None, bounded_above=True):
-    chunks = -(len(extract2qubit(progname)) // -slice_size)
-    if len(extract2qubit(progname)) == 0:
-        print('Exiting... circuit contains no two qubit gates')
-        with open(progname) as f:
-            return (None, f.read())
-    elif routing:
+    chunks = -(len(extractCNOTs(progname)) // -slice_size)
+    if routing:
         stats = solve(progname, cm, swapNum, chunks, pname=cnfname, sname=sname, time_wbo_max=max_sat_time, _calibrationData=calibrationData)
         return (stats, toQasmFF(os.path.join(os.path.split(progname)[0], "qiskit-"+os.path.split(progname)[1]),  cm, swapNum, chunks, sname))
     elif bounded_above:
@@ -785,8 +778,13 @@ def transpile(progname, cm, swapNum=1, cnfname='test', sname='out', slice_size=2
       results = solve(progname, cm, swapNum, chunks, pname=cnfname, sname=sname, _routing=False, _weighted=weighted)
       return ((results['cost'], results['time_wbo'], results['a_star_time']), toQasmFF(os.path.join(os.path.split(progname)[0], "qiskit-"+os.path.split(progname)[1]),  cm, swapNum, chunks, sname, swaps=results['swaps']))
 
+def run_exp(prog_name, arch):
+    base, _ = os.path.splitext(os.path.basename(prog_name))
+    (stats, qasm) = transpile(prog_name, arch, 1, "prob_" + base, "sol_" + base, slice_size=25,
+                              max_sat_time=1800, routing=True, weighted=True,
+                              calibrationData=None, bounded_above=True)
+    return qasm
 
-        
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
